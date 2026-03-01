@@ -1,0 +1,154 @@
+version: '3.8'
+
+services:
+  # Redis for state management
+  redis:
+    image: redis:7-alpine
+    container_name: redroom-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # PostgreSQL for persistent storage
+  postgres:
+    image: postgres:15-alpine
+    container_name: redroom-postgres
+    environment:
+      POSTGRES_DB: redroom
+      POSTGRES_USER: redroom
+      POSTGRES_PASSWORD: redroom_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redroom"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Orchestrator
+  orchestrator:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.orchestrator
+    container_name: redroom-orchestrator
+    depends_on:
+      - redis
+      - postgres
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://redroom:redroom_password@postgres:5432/redroom
+      - LOG_LEVEL=INFO
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - ./models:/models
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${KUBECONFIG}:/root/.kube/config:ro
+    command: uvicorn redroom.orchestrator.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Exploit Lab (GPU-accelerated)
+  exploit-lab:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.exploit-lab
+    container_name: redroom-exploit-lab
+    depends_on:
+      - redis
+      - orchestrator
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - ROCM_VERSION=5.7
+      - GPU_DEVICE=/dev/kfd
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - /opt/rocm:/opt/rocm:ro
+    command: python -m redroom.agents.exploit_lab.worker
+
+  # Demo Fintech Application
+  demo-fintech:
+    build:
+      context: ./src/demo/fintech_app
+      dockerfile: Dockerfile
+    container_name: demo-fintech
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=sqlite:///./fintech.db
+      - ENABLE_VULNERABILITY=true
+    volumes:
+      - demo-data:/app/data
+    command: uvicorn app:app --host 0.0.0.0 --port 8080
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: redroom-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deployment/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: redroom-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./deployment/monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  # Jaeger for distributed tracing
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: redroom-jaeger
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14268:14268"
+      - "14250:14250"
+      - "9411:9411"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+
+volumes:
+  redis-data:
+  postgres-data:
+  demo-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  default:
+    name: redroom-network

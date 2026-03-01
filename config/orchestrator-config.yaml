@@ -1,0 +1,62 @@
+# The Red Room Orchestrator Configuration
+
+orchestrator:
+  name: red-room-orchestrator
+  version: 0.1.0
+  mode: production  # production | demo
+  
+  # State management
+  state:
+    backend: redis
+    redis_url: ${REDIS_URL}
+    ttl_seconds: 3600
+  
+  # Agent configuration
+  agents:
+    saboteur:
+      enabled: true
+      model_path: ${NPU_MODEL_PATH}
+      execution_provider: VitisAIExecutionProvider
+      max_context_length: 8192
+      timeout_seconds: 30
+    
+    exploit_lab:
+      enabled: true
+      gpu_enabled: ${ENABLE_GPU_ACCELERATION}
+      max_concurrent_exploits: 10
+      timeout_seconds: 120
+      max_retries: 3
+    
+    surgeon:
+      enabled: true
+      llm_provider: ${LLM_PROVIDER}
+      llm_model: ${LLM_MODEL}
+      timeout_seconds: 60
+  
+  # Kubernetes configuration
+  kubernetes:
+    namespace: red-room
+    shadow_namespace_prefix: shadow-
+    shadow_namespace_ttl: 300
+    max_concurrent_shadows: 10
+    cleanup_on_failure: true
+  
+  # Security
+  security:
+    enable_sandbox_escape_detection: true
+    network_policy_enabled: true
+    pod_security_standard: restricted
+    max_exploit_retries: 3
+  
+  # Performance
+  performance:
+    load_test_duration: 30
+    load_test_vus: 100
+    max_p95_latency_delta: 50
+  
+  # Monitoring
+  monitoring:
+    enable_metrics: true
+    enable_tracing: true
+    prometheus_port: 9090
+    log_level: INFO
